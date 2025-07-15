@@ -129,8 +129,9 @@ w3=w3-ableitung3_fehler*0.001
 
 b=b-yachsabschnitt_fehler*0.001
 
-loss_line, = ax2.plot([], [], color='purple', label='Loss', zorder=4)
-val_line, = ax2.plot([], [], color='orange', label='Validation Loss', zorder=5)
+loss_line, = ax2.plot([], [], color='purple', label='Loss')
+val_line, = ax2.plot([], [], color='orange', label='Validation Loss')
+ax2.legend(loc='upper right')
 
 w1_line, = ax4.plot([], [], label=[f"W1: {w1:.4f}"], color='green', zorder=7, linestyle='--',alpha=0.3)
 w2_line, = ax4.plot([], [], label=[f"W2: {w2:.4f}"], color='red', zorder=7,linestyle='--',alpha=0.3) 
@@ -142,6 +143,7 @@ scatter = ax.scatter(x, y, zorder=2, label="Scattered training data", color='blu
 #create a scatter plot of the test data
 scatter_test = ax.scatter(x_test[:, 0], y_test, zorder=2, label="Scattered test data", color='cyan',marker='x')
 scatter_train = ax.scatter(x_train[:, 0], y_train, zorder=2, label="Scattered train data", color='hotpink',marker='x')
+
 
 
 # Plot the true graph
@@ -309,7 +311,10 @@ def update(epoch):
     else:
         ax2.set_ylim(0, max(loss_values) * 1.1 if loss_values else 1)
 
-    scatter_pred.set_offsets(np.c_[x1_sorted, y_sorted])  # Update scatter plot with new predictions 
+   
+   
+    scatter_pred.set_offsets(np.c_[x1_sorted, y_sorted+np.random.randn(80,)])  # Update scatter plot with new predictions 
+    
     ax.set_xlim(np.min(x1_train) - 0.5, np.max(x1_train) + 0.5)
     ax.set_ylim(np.min(y_train) - 1, np.max(y_train) + 1)
 
@@ -336,7 +341,7 @@ sort_idx = np.argsort(x1_train)
 x1_sorted = x1_train[sort_idx]
 x2_sorted = x2_train[sort_idx]
 x3_sorted = x3_train[sort_idx]
-y_res = w3*x3_sorted+w2*x2_sorted+w1*x1_sorted+b
+y_res = w3*x3_sorted+w2*x2_sorted+w1*x1_sorted+b+np.random.randn(80,)
 
 scatter_pred = ax.scatter(x1_sorted, y_res, zorder=2, label="Scattered prediction", color='red',marker='x')
 
