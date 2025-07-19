@@ -1,12 +1,12 @@
-Simple MLP: Multivariate Polynomial and Non-Linear Regression Visualization
+## Simple MLP: Multivariate Polynomial and Non-Linear Regression Visualization
 
-Project Goal
+## Project Goal
 
 The simple-mlp project aims to provide an intuitive, real-time visualization of a neural network (Multilayer Perceptron, MLP) learning to approximate a user-defined multivariate function, such as a third-degree polynomial or non-linear expressions involving trigonometric and quadratic terms. By implementing manual gradient descent and symbolic computation, the project serves as a didactic tool to illustrate the mechanics of model fitting, gradient-based optimization, bias-variance trade-offs, and error behavior. The interactive visualizations make the optimization process (loss reduction, weight updates, and error distributions) accessible and understandable, particularly for educational purposes.
 
-Methodology & Implementation
+## Methodology & Implementation
 
-Data
+## Data
 
 
 
@@ -30,13 +30,13 @@ Train/Test Split
 
 Data is split into training (80%) and test (20%) sets using scikit-learn's train_test_split to monitor generalization and detect overfitting.
 
-Model
+## Model
 
 
 
 
 
-Architecture: A simple MLP implemented in symbolicMLP (assumed custom module) with seven learnable parameters:
+## Architecture: A simple MLP implemented in symbolicMLP (assumed custom module) with seven learnable parameters:
 
 
 
@@ -60,7 +60,7 @@ b: Bias term.
 
 Function Representation: The model approximates the user-defined function using symbolic expressions parsed via SymPy, allowing flexibility for linear and non-linear terms.
 
-Optimization
+## Optimization
 
 
 
@@ -102,7 +102,7 @@ The project uses Matplotlib with Tkinter for real-time, interactive visualizatio
 
 
 
-3D Plot:
+## 3D Plot:
 
 
 
@@ -120,7 +120,7 @@ Axes dynamically adjust based on user-selected visualization variables (x1, x2, 
 
 
 
-2D Plots:
+## 2D Plots:
 
 
 
@@ -138,7 +138,7 @@ Error Histogram: Displays the distribution of training and validation residuals.
 
 
 
-Interactivity:
+## Interactivity:
 
 
 
@@ -158,7 +158,7 @@ Dynamic Scaling: Axes automatically adjust to accommodate evolving loss, weights
 
 Note: The prediction history plot (overlaying previous predictions) is currently disabled.
 
-Key Features
+## Key Features
 
 
 
@@ -224,7 +224,7 @@ Python 3.8 or higher
 
 
 
-Required packages:
+## Required packages:
 
 
 
@@ -266,7 +266,7 @@ macOS (Homebrew): brew install python-tk
 
 CUDA toolkit (for CuPy/GPU support, optional)
 
-Limitations
+## Limitations
 
 
 
@@ -290,7 +290,7 @@ Performance: CPU fallback (NumPy) is slower than GPU (CuPy) for large datasets.
 
 Threading: Basic threading for surface computation may not be optimal on all systems.
 
-Future Ideas & Extensions
+## Future Ideas & Extensions
 
 
 
