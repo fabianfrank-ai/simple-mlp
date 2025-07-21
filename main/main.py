@@ -38,8 +38,8 @@ gs=GridSpec(3,4,height_ratios=[4,2,0.5])
 ax=fig.add_subplot(gs[0,0:2],projection='3d')
 ax2d=fig.add_subplot(gs[0,2:4])
 ax_drop=fig.add_axes([0.88,0.88,0.05,0.1])
-ax2=fig.add_subplot(gs[1,0:2])
-ax3=fig.add_subplot(gs[1,2:4])
+ax2=fig.add_subplot(gs[1,2:4])
+ax3=fig.add_subplot(gs[2,0:2])
 ax.view_init(elev=30, azim=135)
 
 
@@ -47,6 +47,7 @@ ax.view_init(elev=30, azim=135)
 
 ax.grid(True, linestyle='--', alpha=0.5)
 ax2d.grid(True,linestyle='--',alpha=0.5)
+
 
 ax.set_zlabel('y', fontsize=14)
 ax.set_title("Training in Action", fontsize=16)
@@ -139,6 +140,7 @@ def parse_expression(user_input):
             w1_sym, w2_sym, w3_sym, b_sym
         })
 
+
         f_true = sp.lambdify([x1_sym, x2_sym, x3_sym], expr, modules=np)
         f_train = sp.lambdify([x1_sym, x2_sym, x3_sym] + all_weights, expr_train, modules=np)
 
@@ -156,6 +158,7 @@ def parse_expression(user_input):
 user_input = input("Enter a function in terms of x1, x2, x3 (e.g., 'x1 + x2 + x3 + 2', 'sin(x3) + cos(x2)'): ")
 f_train, f_true, w1_true, w2_true, w3_true, b_true,nonlinear_terms ,all_weights= parse_expression(user_input)
 
+
 if f_train is None:
     print("Invalid input. Using default function: x1 + x2 + x3 + 1")
     user_input = "x1 + x2 + x3 + 1"
@@ -163,7 +166,7 @@ if f_train is None:
 
 weight_values = [0] * len(all_weights)
 
-mlp=symbolicMLP(cp,nonlinear_terms)
+mlp=symbolicMLP(cp,nonlinear_terms )
 
 vis_vars=input("Choose two visualization variables(e.g. x1,x2 or x1,x3)[default:x1,x2]")
 
@@ -252,7 +255,7 @@ twod_true=ax2d.plot([],[])
 
 if vis_vars== 'x1,x2':
 
-  x1_mesh,x2_mesh= np.meshgrid(np.linspace(np.min(x1_train_cpu),np.max(x1_train_cpu),10),
+  x1_mesh,x2_mesh= np.meshgrid(np.linspace(np.min(x1_train_cpu),np.max(x1_train_cpu),20),
                               np.linspace(np.min(x2_train_cpu),np.max(x2_train_cpu)))
 
   x3_mesh = np.full_like(x1_mesh, np.mean(x3_train_cpu))
@@ -261,7 +264,7 @@ if vis_vars== 'x1,x2':
 if vis_vars== 'x1,x3':
   
 
-  x1_mesh,x3_mesh= np.meshgrid(np.linspace(np.min(x1_train_cpu),np.max(x1_train_cpu),10),
+  x1_mesh,x3_mesh= np.meshgrid(np.linspace(np.min(x1_train_cpu),np.max(x1_train_cpu),20),
                               np.linspace(np.min(x2_train_cpu),np.max(x2_train_cpu)))
 
   x2_mesh=np.full_like(x1_mesh,np.mean(x2_train_cpu))
@@ -269,7 +272,7 @@ if vis_vars== 'x1,x3':
   ax.set_ylabel('x3', fontsize=14)
 if vis_vars== 'x2,x3':
 
-  x2_mesh,x3_mesh= np.meshgrid(np.linspace(np.min(x1_train_cpu),np.max(x1_train_cpu),10),
+  x2_mesh,x3_mesh= np.meshgrid(np.linspace(np.min(x1_train_cpu),np.max(x1_train_cpu),20),
                               np.linspace(np.min(x2_train_cpu),np.max(x2_train_cpu)))
 
   x1_mesh=np.full_like(x2_mesh,np.mean(x1_train_cpu))
@@ -277,7 +280,7 @@ if vis_vars== 'x2,x3':
   ax.set_ylabel('x3', fontsize=14)
 
 
-mlp_sklearn = MLPRegressor(hidden_layer_sizes=(10,), max_iter=10, learning_rate_init=0.01, warm_start=True,random_state=42)
+mlp_sklearn = MLPRegressor(hidden_layer_sizes=(200,), max_iter=5000, learning_rate_init=0.001,random_state=42,batch_size=580,warm_start=True)
 X_train = np.column_stack((x1_mesh.ravel(), x2_mesh.ravel(), x3_mesh.ravel()))
 y_train_mesh = f_train(x1_mesh, x2_mesh, x3_mesh,*weight_values).ravel()
 X_train_scaled = scaler.fit_transform(X_train.get())
@@ -339,9 +342,9 @@ def on_select(label):
 
 radio.on_clicked(on_select)
 
-contour_true = ax2d.contourf(x1_mesh.get(),  x2_mesh.get(),y_true_mesh.get(), levels=30, cmap='inferno', alpha=0.2,label="true")
-contour_pred = ax2d.contourf(x1_mesh.get(), x2_mesh.get(), y_pred_mesh.get(), levels=30, cmap='viridis', alpha=0.2,label='Model Prediction')
-contour_sk=ax2d.contourf(x1_mesh.get(),x2_mesh.get(),y_pred_sklearn_mesh,levels=30,cmap='plasma',alpha=0.2,label="Sklearn Prediction")
+contour_true = ax2d.contourf(x1_mesh.get(),  x2_mesh.get(),y_true_mesh.get(), cmap='inferno', alpha=0.2,label="true")
+contour_pred = ax2d.contourf(x1_mesh.get(), x2_mesh.get(), y_pred_mesh.get(), cmap='viridis', alpha=0.2,label='Model Prediction')
+contour_sk=ax2d.contourf(x1_mesh.get(),x2_mesh.get(),y_pred_sklearn_mesh, cmap='plasma',alpha=0.2,label="Sklearn Prediction")
 cbar = plt.colorbar(contour_pred, ax=ax2d)
 abar =plt.colorbar(contour_true,ax=ax2d)
 bbar=plt.colorbar(contour_sk,ax=ax2d)
@@ -350,10 +353,11 @@ abar.set_label("True Value")
 bbar.set_label("Sklearn Prediction")
 
 
-batch_size=40
+batch_size=30
 
 def to_cpu(arr):
     return arr.get() if isinstance(arr, cp.ndarray) else arr
+
 
 # Update function for animation
 plotted_surfaces = {'pred': None, 'sk': None, 'true': None}
@@ -375,6 +379,7 @@ def update(epoch):
         y_pred_batch = mlp.forward(batch_x1, batch_x2, batch_x3)
         mse_train += mlp.backward(batch_x1, batch_x2, batch_x3, batch_y_true, lr, y_pred_batch)
     mse_train /= (len(x1_train) // batch_size + 1)
+
 
     y_pred_train = mlp.forward(x1_train, x2_train, x3_train)
     y_pred_test = mlp.forward(x1_test, x2_test, x3_test)
@@ -404,6 +409,8 @@ def update(epoch):
     w3_history.append(float(mlp.w_vals.get('w3', 0)))
     b_history.append(float(mlp.w_vals.get('b', 0)))
 
+ 
+    
     # Update 3D and contour plots every 5 frames
     if epoch % 5 == 0:
         y_pred_mesh, y_pred_sklearn_mesh = compute_pred_mesh(mlp)
@@ -416,9 +423,10 @@ def update(epoch):
         # Update contour plots
         for coll in ax2d.collections:
             coll.remove()
-        contour_true = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh),to_cpu(y_true_mesh), levels=30, cmap='inferno', alpha=0.2)
-        contour_pred = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh),to_cpu(y_pred_mesh), levels=30, cmap='viridis', alpha=0.2)
-        contour_sk = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh), y_pred_sklearn_mesh, levels=30, cmap='cool', alpha=0.2)
+        contour_true = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh),to_cpu(y_true_mesh),cmap='inferno', alpha=0.2) 
+        contour_pred = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh),to_cpu(y_pred_mesh), cmap='viridis', alpha=0.2) 
+        contour_sk = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh), y_pred_sklearn_mesh, cmap='cool', alpha=0.2)
+        
 
     # Update 2D Plot
     choice = radio.value_selected
@@ -431,8 +439,11 @@ def update(epoch):
         X_plot = np.column_stack((x_plot, x2_plot, x3_plot))
         X_plot_scaled = scaler.transform(to_cpu(X_plot))
         y_sklearn_plot = mlp_sklearn.predict(X_plot_scaled)
+        contour_true = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh),to_cpu(y_true_mesh),cmap='inferno', alpha=0.2) 
+        contour_pred = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh),to_cpu(y_pred_mesh), cmap='viridis', alpha=0.2) 
+        contour_sk = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh), y_pred_sklearn_mesh, cmap='cool', alpha=0.2)
+        ax2d.scatter(x1_train_cpu, y_train_cpu, label="Training Data", color='blue',marker='o')
         ax2d.plot(to_cpu(x_plot), to_cpu(f_true(x_plot, x2_plot, x3_plot)), label='True', color='hotpink', alpha=0.7)
-        ax2d.scatter(x1_train_cpu, y_train_cpu, label="Training Data", color='blue', marker='o')
         ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot), label='Predicted', color='lime', alpha=0.7)
         ax2d.plot(to_cpu(x_plot), y_sklearn_plot, label='Sklearn Predicted', color='black', linestyle='--', alpha=0.7)
         ax2d.set_xlabel("x1")
@@ -446,7 +457,7 @@ def update(epoch):
         X_plot_scaled = scaler.transform(to_cpu(X_plot))
         y_sklearn_plot = mlp_sklearn.predict(X_plot_scaled)
         ax2d.plot(to_cpu(x_plot), to_cpu(f_true(x1_plot, x_plot, x3_plot)), label='True', color='hotpink', alpha=0.7)
-        ax2d.scatter(x2_train_cpu, y_train_cpu, label="Training Data", color='blue', marker='o')
+        ax2d.scatter(to_cpu(x_plot), to_cpu(f_true(x1_plot, x_plot, x3_plot)), label="Training Data", color='blue', marker='o')
         ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot), label='Predicted', color='lime', alpha=0.7)
         ax2d.plot(to_cpu(x_plot), y_sklearn_plot, label='Sklearn Predicted', color='black', linestyle='--', alpha=0.7)
         ax2d.set_xlabel("x2")
@@ -512,7 +523,7 @@ def update(epoch):
     return (scatter, scatter_test, loss_line, val_line, sklearn_mse_line, sklearn_val_line, w1_line, w2_line, w3_line, b_line)
 
 # Animation
-ani = FuncAnimation(fig, update, frames=100, interval=50, blit=False, repeat=False)
+ani = FuncAnimation(fig, update, frames=300, interval=50, blit=False, repeat=False,cache_frame_data=False)
 plt.tight_layout()
 plt.subplots_adjust(bottom=0.15)
 plt.show()

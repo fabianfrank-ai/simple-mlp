@@ -2,13 +2,12 @@ import sympy as sp
 import numpy as np
 
 class symbolicMLP:
-    def __init__(self, np_module, nonlinear_weights,scale_factor=2.0, offset=0.0):
+    def __init__(self, np_module, nonlinear_terms, scale_factor=2.0, offset=0.0):
         self.np = np_module
-        self.nonlinear_weights = nonlinear_weights
-        self.scale_factor = scale_factor  # Scalable range (e.g., 2 * tanh + offset)
+        self.nonlinear_weights = nonlinear_terms  # Updated by main()
+        self.scale_factor = scale_factor
         self.offset = offset
-
-
+        self.epoch_count = 0
 
         # Symbolic weights
         self.x1, self.x2, self.x3 = sp.symbols('x1 x2 x3')
@@ -16,18 +15,22 @@ class symbolicMLP:
             'w1': sp.Symbol('w1'), 'w2': sp.Symbol('w2'), 'w3': sp.Symbol('w3'),
             'b': sp.Symbol('b')
         }
-        self.w_symbols.update({str(sym): sym for func in nonlinear_weights.values() for _, sym in func.items()})
+        self.w_symbols.update({str(sym): sym for func in nonlinear_terms.values() for _, sym in func.items()})
+        print(f"Init: nonlinear_terms: {nonlinear_terms}")  # Debug initial terms
+        print(f"Init: w_symbols: {self.w_symbols}")
 
         # Initialize weights
-        scale = 0.1
+        scale = 0.7
         self.w_vals = {k: self.np.random.randn() * scale for k in self.w_symbols.keys()}
+        print(f"Init: Initial weights: {self.w_vals}")
 
-        # Symbolic function (w4 * x1 * x2 removed)
+        # Symbolic function
         self.z = (self.w_symbols['w1'] * self.x1 + self.w_symbols['w2'] * self.x2 +
                   self.w_symbols['w3'] * self.x3 + self.w_symbols['b'])
-        for func, wdict in nonlinear_weights.items():
+        for func, wdict in nonlinear_terms.items():
             for var, w_sym in wdict.items():
                 self.z += w_sym * func(var)
+        print(f"Init: Symbolic z: {self.z}")  # Debug symbolic expression
 
         # Lambdify for efficiency
         self.func_forward = sp.lambdify(
@@ -37,43 +40,53 @@ class symbolicMLP:
 
     def _apply_activation(self, func, z):
         """Chooses activation based on function"""
+        if not self.nonlinear_weights:
+            return self.relu(z) # Default to linear if no nonlinear terms
         activation_map = {
             sp.sin: self.sin_activation,
             sp.cos: self.cos_activation,
             sp.exp: self.exp_activation,
             sp.tanh: self.tanh_activation
         }
-        return activation_map.get(func, lambda x: x)(z)
-
-    def _apply_derivative(self, func, z):
+        activation = activation_map.get(func, lambda x: x)
+        print(f"Applying activation: {activation.__name__} for func {func}")
+        return activation(z)
+    
+    def _apply_derivative(self, z,func=None):
         """Chooses derivative based on the function"""
+        if not self.nonlinear_weights:
+            return self.relu_derivative(z)
         derivative_map = {
             sp.sin: self.sin_derivative,
             sp.cos: self.cos_derivative,
             sp.exp: self.exp_derivative,
             sp.tanh: self.tanh_derivative
         }
-        return derivative_map.get(func, lambda x: 1.0)(z)
+        derivative = derivative_map.get(func, lambda x: 1.0)
+        print(f"Applying derivative: {derivative.__name__} for func {func}")
+        return derivative(z)
 
     def forward(self, x1, x2, x3):
         """Efficient forward propagation"""
         weights = [self.w_vals[k] for k in self.w_symbols.keys()]
         z = self.func_forward(x1, x2, x3, *weights)
-        return self.np.log1p(self.np.exp(z))
-
+        return self._apply_activation(self,z)
     def _clip(self, grad, threshold):
         """Clips the gradient"""
         return self.np.clip(grad, -threshold, threshold)
 
-    def backward(self, x1, x2, x3, y_true, lr, y_pred, clip_grad=1):
+    def backward(self, x1, x2, x3, y_true, lr, y_pred, clip_grad=4):
         """Optimized backpropagation"""
+        
+
+
         y_true = self.np.array(y_true)
         weights = [self.w_vals[k] for k in self.w_symbols.keys()]
         z = self.func_forward(x1, x2, x3, *weights)
 
         # Loss and derivative
         dL_dy = 2 * (y_pred - y_true) / y_true.size  # MSE derivative
-        dL_dz = dL_dy * self.tanh_derivative(z)
+        dL_dz = dL_dy *self._apply_derivative(z)
 
         # Calculate gradients numerically
         grad_w1 = self.np.mean(dL_dz * x1)
@@ -86,7 +99,67 @@ class symbolicMLP:
         for func, wdict in self.nonlinear_weights.items():
             for var_sym, w_sym in wdict.items():
                 x = {'x1': x1, 'x2': x2, 'x3': x3}[str(var_sym)]
-                grad_nonlinear[str(w_sym)] = self.np.mean(dL_dz * self._apply_derivative(func, x))
+                grad_nonlinear[str(w_sym)] = self.np.mean(dL_dz * self._apply_derivative(x,func))
+
+        
+        # Update weights
+        updates = {
+            'w1': grad_w1, 'w2': grad_w2, 'w3': grad_w3, 'b': grad_b
+        }
+        updates.update(grad_nonlinear)
+        for w, grad in updates.items():
+            self.w_vals[w] -= lr * self._clip(grad, clip_grad)
+
+        # Calculate loss
+        loss =0.5*self.np.mean((y_pred - y_true) ** 2)
+        self.epoch_count+=1
+
+        print(f"grad_w1: {grad_w1}, grad_w2: {grad_w2}, grad_w3: {grad_w3}, grad_b: {grad_b}")
+        for w_sym, grad in grad_nonlinear.items():
+            print(f"grad for {w_sym}: {grad}")
+        if self.epoch_count % 5 == 0:  # Print every 5 epochs
+            print(f"Epoch {self.epoch_count}: Gradients w1/w2/w3/b: {grad_w1:.4f}/{grad_w2:.4f}/{grad_w3:.4f}/{grad_b:.4f}")
+            print(f"Epoch {self.epoch_count}: Weights w1/w2/w3/b: {self.w_vals['w1']:.4f}/{self.w_vals['w2']:.4f}/{self.w_vals['w3']:.4f}/{self.w_vals['b']:.4f}")
+        print(self.w_vals)
+        return loss
+
+    # Activations
+    def tanh_activation(self, z): return self.np.tanh(z)
+    def sin_activation(self, z): return self.np.sin(z)
+    def cos_activation(self, z): return self.np.cos(z)
+    def exp_activation(self, z): return self.np.exp(z)
+    def relu(self,z): return max(0,z)
+
+    # Derivatives
+    def tanh_derivative(self, z): return 1 - (self.np.tanh(z)) ** 2
+    def sin_derivative(self, z): return self.np.cos(z)
+    def cos_derivative(self, z): return -self.np.sin(z)
+    def exp_derivative(self, z): return self.np.exp(z)
+    def relu_derivative(self,z):return max(0,1)
+
+    def backward(self, x1, x2, x3, y_true, lr, y_pred, clip_grad=4):
+        """Optimized backpropagation"""
+        y_true = self.np.array(y_true)
+        weights = [self.w_vals[k] for k in self.w_symbols.keys()]
+        z = self.func_forward(x1, x2, x3, *weights)
+
+        # Loss and derivative
+        dL_dy = 2 * (y_pred - y_true) / y_true.size  # MSE derivative
+        func = next(iter(self.nonlinear_weights.keys())) if self.nonlinear_weights else None
+        dL_dz = dL_dy * self._apply_derivative(z, func)
+
+        # Calculate gradients numerically
+        grad_w1 = self.np.mean(dL_dz * x1)
+        grad_w2 = self.np.mean(dL_dz * x2)
+        grad_w3 = self.np.mean(dL_dz * x3)
+        grad_b = self.np.mean(dL_dz)
+
+        # Gradients for non-linear weights
+        grad_nonlinear = {}
+        for func, wdict in self.nonlinear_weights.items():
+            for var_sym, w_sym in wdict.items():
+                x = {'x1': x1, 'x2': x2, 'x3': x3}[str(var_sym).split('_')[-1]]  # Extract 'x1' from 'w_sin_x1'
+                grad_nonlinear[str(w_sym)] = self.np.mean(dL_dz * self._apply_derivative(x, func))
 
         # Update weights
         updates = {
@@ -98,10 +171,14 @@ class symbolicMLP:
 
         # Calculate loss
         loss = 0.5 * self.np.mean((y_pred - y_true) ** 2)
+        self.epoch_count += 1
 
         print(f"grad_w1: {grad_w1}, grad_w2: {grad_w2}, grad_w3: {grad_w3}, grad_b: {grad_b}")
         for w_sym, grad in grad_nonlinear.items():
             print(f"grad for {w_sym}: {grad}")
+        if self.epoch_count % 5 == 0:
+            print(f"Epoch {self.epoch_count}: Gradients w1/w2/w3/b: {grad_w1:.4f}/{grad_w2:.4f}/{grad_w3:.4f}/{grad_b:.4f}")
+            print(f"Epoch {self.epoch_count}: Weights w1/w2/w3/b: {self.w_vals['w1']:.4f}/{self.w_vals['w2']:.4f}/{self.w_vals['w3']:.4f}/{self.w_vals['b']:.4f}")
         print(self.w_vals)
         return loss
 
@@ -110,9 +187,13 @@ class symbolicMLP:
     def sin_activation(self, z): return self.np.sin(z)
     def cos_activation(self, z): return self.np.cos(z)
     def exp_activation(self, z): return self.np.exp(z)
+    def relu(self, z): return z if z > 0 else 0.0
 
     # Derivatives
     def tanh_derivative(self, z): return 1 - (self.np.tanh(z)) ** 2
     def sin_derivative(self, z): return self.np.cos(z)
     def cos_derivative(self, z): return -self.np.sin(z)
     def exp_derivative(self, z): return self.np.exp(z)
+    def relu_derivative(self, z): return 0 if z > 0 else 0.0
+
+ 
