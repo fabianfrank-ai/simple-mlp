@@ -2,198 +2,211 @@ import sympy as sp
 import numpy as np
 
 class symbolicMLP:
-    def __init__(self, np_module, nonlinear_terms, scale_factor=2.0, offset=0.0):
+    def __init__(self, np_module, nonlinear_terms, l2_lambda, lr, hidden_layers, scale_factor=2.0, offset=0.0):
         self.np = np_module
-        self.nonlinear_weights = nonlinear_terms  # Updated by main()
+        self.nonlinear_weights = nonlinear_terms
         self.scale_factor = scale_factor
         self.offset = offset
         self.epoch_count = 0
+        self.lr = lr
+        self.status = "running..."
+        self.stop_flag = False
+        self.counter = 0
+        self.patience = 10
+        self.loss_history = []
+        self.best_loss = float('inf')
+        self.best_weights = {}
+        self.l2_lambda = l2_lambda
+        self.hidden_layers = hidden_layers if isinstance(hidden_layers, list) else [hidden_layers]
+        self.solver = 'adam'
 
-        # Symbolic weights
-        self.x1, self.x2, self.x3 = sp.symbols('x1 x2 x3')
-        self.w_symbols = {
-            'w1': sp.Symbol('w1'), 'w2': sp.Symbol('w2'), 'w3': sp.Symbol('w3'),
-            'b': sp.Symbol('b')
-        }
-        self.w_symbols.update({str(sym): sym for func in nonlinear_terms.values() for _, sym in func.items()})
-        print(f"Init: nonlinear_terms: {nonlinear_terms}")  # Debug initial terms
-        print(f"Init: w_symbols: {self.w_symbols}")
+        # Determine output activation based on nonlinear terms
+        self.output_activation = next((f for f, terms in nonlinear_terms.items() if terms), None)
 
-        # Initialize weights
-        scale = 0.7
-        self.w_vals = {k: self.np.random.randn() * scale for k in self.w_symbols.keys()}
-        print(f"Init: Initial weights: {self.w_vals}")
+        # Initialize weights and biases as matrices and vectors
+        scale = 0.1
+        input_size = 3  # For x1, x2, x3
+        self.weights = []
+        self.biases = []
+        prev_size = input_size
+        for neurons in self.hidden_layers:
+            self.weights.append(self.np.random.randn(neurons, prev_size) * scale)
+            self.biases.append(self.np.random.randn(neurons, 1) * scale)
+            prev_size = neurons
+        # Output layer (1 neuron)
+        self.weights.append(self.np.random.randn(1, prev_size) * scale)
+        self.biases.append(self.np.random.randn(1, 1) * scale)
 
-        # Symbolic function
-        self.z = (self.w_symbols['w1'] * self.x1 + self.w_symbols['w2'] * self.x2 +
-                  self.w_symbols['w3'] * self.x3 + self.w_symbols['b'])
-        for func, wdict in nonlinear_terms.items():
-            for var, w_sym in wdict.items():
-                self.z += w_sym * func(var)
-        print(f"Init: Symbolic z: {self.z}")  # Debug symbolic expression
-
-        # Lambdify for efficiency
-        self.func_forward = sp.lambdify(
-            [self.x1, self.x2, self.x3] + list(self.w_symbols.values()),
-            self.z, modules=self.np
-        )
+        # Adam optimization parameters
+        self.m_w = [self.np.zeros_like(w) for w in self.weights]
+        self.v_w = [self.np.zeros_like(w) for w in self.weights]
+        self.m_b = [self.np.zeros_like(b) for b in self.biases]
+        self.v_b = [self.np.zeros_like(b) for b in self.biases]
+        self.beta1 = 0.9
+        self.beta2 = 0.999
+        self.epsilon = 1e-8
+        self.t = 0
 
     def _apply_activation(self, func, z):
-        """Chooses activation based on function"""
-        if not self.nonlinear_weights:
-            return self.relu(z) # Default to linear if no nonlinear terms
-        activation_map = {
-            sp.sin: self.sin_activation,
-            sp.cos: self.cos_activation,
-            sp.exp: self.exp_activation,
-            sp.tanh: self.tanh_activation
-        }
-        activation = activation_map.get(func, lambda x: x)
-        print(f"Applying activation: {activation.__name__} for func {func}")
-        return activation(z)
-    
-    def _apply_derivative(self, z,func=None):
-        """Chooses derivative based on the function"""
-        if not self.nonlinear_weights:
-            return self.relu_derivative(z)
-        derivative_map = {
-            sp.sin: self.sin_derivative,
-            sp.cos: self.cos_derivative,
-            sp.exp: self.exp_derivative,
-            sp.tanh: self.tanh_derivative
-        }
-        derivative = derivative_map.get(func, lambda x: 1.0)
-        print(f"Applying derivative: {derivative.__name__} for func {func}")
-        return derivative(z)
+        """Applies the specified activation function to z."""
+        if func == sp.sin:
+            return self.np.sin(z)
+        elif func == sp.cos:
+            return self.np.cos(z)
+        elif func == sp.exp:
+            return self.np.exp(z)
+        elif func == sp.tanh:
+            return self.np.tanh(z)
+        elif func == 'sigmoid':
+            return 1/(1 + self.np.exp(-z))  
+        elif func == 'relu':
+            return self.np.where(z > 0, z, 0)  
+        else:
+            return self.np.maximum(0.01 * z, z)  # Leaky ReLU as default
+
+    def _apply_derivative(self, z, func):
+        """Applies the derivative of the specified activation function."""
+        if func == sp.sin:
+            return self.np.cos(z)
+        elif func == sp.cos:
+            return -self.np.sin(z)
+        elif func == sp.exp:
+            return self.np.exp(z)
+        elif func == sp.tanh:
+            return 1 - self.np.tanh(z)**2
+        elif func == 'sigmoid':
+            return self.np.exp(z) / (1 + self.np.exp(z))**2  # sigmoid derivative
+        elif func == 'relu':
+            return self.np.where(z > 0, 1, 0.01)   
+        else:
+            return self.np.where(z > 0, 1, 0.01)  # Leaky ReLU derivative
 
     def forward(self, x1, x2, x3):
-        """Efficient forward propagation"""
-        weights = [self.w_vals[k] for k in self.w_symbols.keys()]
-        z = self.func_forward(x1, x2, x3, *weights)
-        return self._apply_activation(self,z)
-    def _clip(self, grad, threshold):
-        """Clips the gradient"""
-        return self.np.clip(grad, -threshold, threshold)
+        """Computes the forward pass through the network."""
+        x = self.np.column_stack((x1, x2, x3)).T  # Shape: (3, n_samples)
+        for w, b in zip(self.weights[:-1], self.biases[:-1]):
+            z = w @ x + b
+            x = self._apply_activation(self.output_activation, z)
+        z_out = self.weights[-1] @ x + self.biases[-1]
+        return self._apply_activation(self.output_activation, z_out)
 
-    def backward(self, x1, x2, x3, y_true, lr, y_pred, clip_grad=4):
-        """Optimized backpropagation"""
-        
+    def backward(self, x1, x2, x3, y_true):
+        y_true = self.np.array(y_true).reshape(1, -1)
+        x = self.np.column_stack((x1, x2, x3)).T  # Shape: (3, n_samples)
+        layers = [x]
+        zs = []
 
+        # Forward pass to store intermediates
+        for w, b in zip(self.weights[:-1], self.biases[:-1]):
+            z = w @ x + b
+            zs.append(z)
+            x = self._apply_activation(self.output_activation, z)
+            layers.append(x)  # layers[1] is first hidden layer, layers[-2] is last hidden layer
+        z_out = self.weights[-1] @ x + self.biases[-1]
+        zs.append(z_out)
+        layers.append(z_out)  # layers[-1] is z_out
 
-        y_true = self.np.array(y_true)
-        weights = [self.w_vals[k] for k in self.w_symbols.keys()]
-        z = self.func_forward(x1, x2, x3, *weights)
+        y_pred = self._apply_activation(self.output_activation, z_out)
 
-        # Loss and derivative
-        dL_dy = 2 * (y_pred - y_true) / y_true.size  # MSE derivative
-        dL_dz = dL_dy *self._apply_derivative(z)
-
-        # Calculate gradients numerically
-        grad_w1 = self.np.mean(dL_dz * x1)
-        grad_w2 = self.np.mean(dL_dz * x2)
-        grad_w3 = self.np.mean(dL_dz * x3)
-        grad_b = self.np.mean(dL_dz)
-
-        # Gradients for non-linear weights
-        grad_nonlinear = {}
-        for func, wdict in self.nonlinear_weights.items():
-            for var_sym, w_sym in wdict.items():
-                x = {'x1': x1, 'x2': x2, 'x3': x3}[str(var_sym)]
-                grad_nonlinear[str(w_sym)] = self.np.mean(dL_dz * self._apply_derivative(x,func))
-
-        
-        # Update weights
-        updates = {
-            'w1': grad_w1, 'w2': grad_w2, 'w3': grad_w3, 'b': grad_b
-        }
-        updates.update(grad_nonlinear)
-        for w, grad in updates.items():
-            self.w_vals[w] -= lr * self._clip(grad, clip_grad)
-
-        # Calculate loss
-        loss =0.5*self.np.mean((y_pred - y_true) ** 2)
-        self.epoch_count+=1
-
-        print(f"grad_w1: {grad_w1}, grad_w2: {grad_w2}, grad_w3: {grad_w3}, grad_b: {grad_b}")
-        for w_sym, grad in grad_nonlinear.items():
-            print(f"grad for {w_sym}: {grad}")
-        if self.epoch_count % 5 == 0:  # Print every 5 epochs
-            print(f"Epoch {self.epoch_count}: Gradients w1/w2/w3/b: {grad_w1:.4f}/{grad_w2:.4f}/{grad_w3:.4f}/{grad_b:.4f}")
-            print(f"Epoch {self.epoch_count}: Weights w1/w2/w3/b: {self.w_vals['w1']:.4f}/{self.w_vals['w2']:.4f}/{self.w_vals['w3']:.4f}/{self.w_vals['b']:.4f}")
-        print(self.w_vals)
-        return loss
-
-    # Activations
-    def tanh_activation(self, z): return self.np.tanh(z)
-    def sin_activation(self, z): return self.np.sin(z)
-    def cos_activation(self, z): return self.np.cos(z)
-    def exp_activation(self, z): return self.np.exp(z)
-    def relu(self,z): return max(0,z)
-
-    # Derivatives
-    def tanh_derivative(self, z): return 1 - (self.np.tanh(z)) ** 2
-    def sin_derivative(self, z): return self.np.cos(z)
-    def cos_derivative(self, z): return -self.np.sin(z)
-    def exp_derivative(self, z): return self.np.exp(z)
-    def relu_derivative(self,z):return max(0,1)
-
-    def backward(self, x1, x2, x3, y_true, lr, y_pred, clip_grad=4):
-        """Optimized backpropagation"""
-        y_true = self.np.array(y_true)
-        weights = [self.w_vals[k] for k in self.w_symbols.keys()]
-        z = self.func_forward(x1, x2, x3, *weights)
-
-        # Loss and derivative
-        dL_dy = 2 * (y_pred - y_true) / y_true.size  # MSE derivative
-        func = next(iter(self.nonlinear_weights.keys())) if self.nonlinear_weights else None
-        dL_dz = dL_dy * self._apply_derivative(z, func)
-
-        # Calculate gradients numerically
-        grad_w1 = self.np.mean(dL_dz * x1)
-        grad_w2 = self.np.mean(dL_dz * x2)
-        grad_w3 = self.np.mean(dL_dz * x3)
-        grad_b = self.np.mean(dL_dz)
-
-        # Gradients for non-linear weights
-        grad_nonlinear = {}
-        for func, wdict in self.nonlinear_weights.items():
-            for var_sym, w_sym in wdict.items():
-                x = {'x1': x1, 'x2': x2, 'x3': x3}[str(var_sym).split('_')[-1]]  # Extract 'x1' from 'w_sin_x1'
-                grad_nonlinear[str(w_sym)] = self.np.mean(dL_dz * self._apply_derivative(x, func))
-
-        # Update weights
-        updates = {
-            'w1': grad_w1, 'w2': grad_w2, 'w3': grad_w3, 'b': grad_b
-        }
-        updates.update(grad_nonlinear)
-        for w, grad in updates.items():
-            self.w_vals[w] -= lr * self._clip(grad, clip_grad)
-
-        # Calculate loss
+        # Compute loss with L2 regularization
         loss = 0.5 * self.np.mean((y_pred - y_true) ** 2)
+        l2_reg = sum(self.np.sum(w**2) for w in self.weights)
+        loss += 0.5 * self.l2_lambda * l2_reg
+        self.loss_history.append(loss)
+
+        # Backward pass
+        dL_dy = (y_pred - y_true) / y_true.size  # Shape: (1, n_samples)
+        dL_dz = dL_dy * self._apply_derivative(z_out, self.output_activation)
+
+        # Output layer gradients
+        delta = dL_dz  # Shape: (1, n_samples)
+        grad_w = delta @ layers[-2].T  # layers[-2] should be (50, n_samples), result should be (1, 50)
+        grad_w = grad_w / x1.size  # Normalize by batch size
+        grad_b = self.np.sum(delta, axis=1, keepdims=True)  # Shape: (1, 1)
+        self.m_w[-1], self.v_w[-1] = self._update_weights(self.weights[-1], grad_w, self.m_w[-1], self.v_w[-1])
+        self.m_b[-1], self.v_b[-1] = self._update_biases(self.biases[-1], grad_b, self.m_b[-1], self.v_b[-1])
+
+        # Hidden layers gradients
+        for i in range(len(self.hidden_layers) - 1, -1, -1):
+            delta = (self.weights[i+1].T @ delta) * self._apply_derivative(zs[i], sp.tanh)
+            grad_w = delta @ layers[i].T  # Shape should match weights[i]
+            grad_w = grad_w / x1.size
+            grad_b = self.np.sum(delta, axis=1, keepdims=True)
+            self.m_w[i], self.v_w[i] = self._update_weights(self.weights[i], grad_w, self.m_w[i], self.v_w[i])
+            self.m_b[i], self.v_b[i] = self._update_biases(self.biases[i], grad_b, self.m_b[i], self.v_b[i])
+
+        # Early stopping and best weights tracking
+        if loss < self.best_loss:
+            self.best_loss = loss
+            self.best_weights = {'weights': [w.copy() for w in self.weights], 'biases': [b.copy() for b in self.biases]}
+            self.counter = 0
+        else:
+            self.counter += 1
+        if self.counter >= self.patience:
+            self.stop_flag = True
+
         self.epoch_count += 1
-
-        print(f"grad_w1: {grad_w1}, grad_w2: {grad_w2}, grad_w3: {grad_w3}, grad_b: {grad_b}")
-        for w_sym, grad in grad_nonlinear.items():
-            print(f"grad for {w_sym}: {grad}")
-        if self.epoch_count % 5 == 0:
-            print(f"Epoch {self.epoch_count}: Gradients w1/w2/w3/b: {grad_w1:.4f}/{grad_w2:.4f}/{grad_w3:.4f}/{grad_b:.4f}")
-            print(f"Epoch {self.epoch_count}: Weights w1/w2/w3/b: {self.w_vals['w1']:.4f}/{self.w_vals['w2']:.4f}/{self.w_vals['w3']:.4f}/{self.w_vals['b']:.4f}")
-        print(self.w_vals)
         return loss
+    
 
-    # Activations
+    def _update_weights(self, w, grad_w, m_w, v_w):
+        """Updates weights using chosen optimizer."""
+        if self.solver == 'adam':
+            self.t += 1
+            m_w = self.beta1 * m_w + (1 - self.beta1) * grad_w
+            v_w = self.beta2 * v_w + (1 - self.beta2) * (grad_w ** 2)
+            m_hat = m_w / (1 - self.beta1 ** self.t)
+            v_hat = v_w / (1 - self.beta2 ** self.t)
+            w -= self.lr * m_hat / (self.np.sqrt(v_hat) + self.epsilon)
+            return m_w, v_w
+        elif self.solver =='sgd':
+            self.t += 1
+            w -= self.lr * grad_w
+            return m_w, v_w
+        elif self.solver == 'rmsprop':
+            self.t += 1
+            v_w= self.beta2*v_w+(1-self.beta2) * (grad_w ** 2)
+            w -= grad_w*self.lr/(self.np.sqrt(v_w)+self.epsilon)
+            return m_w, v_w
+    
+        
+
+    def _update_biases(self, b, grad_b, m_b, v_b):
+        """Updates biases using chosen optimizer."""
+        if self.solver=='adam':
+            m_b = self.beta1 * m_b + (1 - self.beta1) * grad_b
+            v_b = self.beta2 * v_b + (1 - self.beta2) * (grad_b ** 2)
+            m_hat = m_b / (1 - self.beta1 ** self.t)
+            v_hat = v_b / (1 - self.beta2 ** self.t)
+            b -= self.lr * m_hat / (self.np.sqrt(v_hat) + self.epsilon)
+            return m_b, v_b
+        elif self.solver=='sgd':
+            b -= self.lr * grad_b
+            return m_b, v_b
+        elif self.solver=='rmsprop':
+            v_b= self.beta2*v_b+(1-self.beta2) * (grad_b ** 2)
+            b -= grad_b*self.lr/(self.np.sqrt(v_b)+self.epsilon)
+            return m_b, v_b
+
+    def restore_best_weights(self):
+        """Restores the best weights found during training."""
+        if self.best_weights:
+            self.weights = [w.copy() for w in self.best_weights['weights']]
+            self.biases = [b.copy() for b in self.best_weights['biases']]
+
+
+  
+    # Activation functions
     def tanh_activation(self, z): return self.np.tanh(z)
     def sin_activation(self, z): return self.np.sin(z)
     def cos_activation(self, z): return self.np.cos(z)
     def exp_activation(self, z): return self.np.exp(z)
-    def relu(self, z): return z if z > 0 else 0.0
+    def relu(self, z, alpha=0.01): return self.np.maximum(alpha * z, z)
 
-    # Derivatives
+    # Derivative functions
     def tanh_derivative(self, z): return 1 - (self.np.tanh(z)) ** 2
     def sin_derivative(self, z): return self.np.cos(z)
     def cos_derivative(self, z): return -self.np.sin(z)
     def exp_derivative(self, z): return self.np.exp(z)
-    def relu_derivative(self, z): return 0 if z > 0 else 0.0
-
+    def relu_derivative(self, z, alpha=0.01): return self.np.where(z > 0, 1.0, alpha)
  

@@ -1,7 +1,7 @@
 import cupy as cp
-import matplotlib.pyplot
 import numpy
 import matplotlib
+import matplotlib.widgets as widgets
 import tkinter as tk
 from tkinter import ttk,messagebox
 matplotlib.use('TkAgg')
@@ -17,9 +17,26 @@ import threading
 from symbolic_backpropagation import symbolicMLP 
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
+import streamlit as st
+
 
 scaler= StandardScaler()
-
+# Customize matplotlib colors
+matplotlib.rcParams.update({
+    'figure.facecolor': '#1e1e1e',      
+    'axes.facecolor': '#2c2c2c',   
+    'axes.edgecolor': 'white',
+    'axes.labelcolor': 'white',
+    'axes.titlecolor': 'white',
+    'xtick.color': 'lightgray',
+    'ytick.color': 'lightgray',
+    'text.color': 'white',
+    'grid.color': '#444444',
+    'legend.facecolor': '#2c2c2c',
+    'legend.edgecolor': 'white',
+    'savefig.facecolor': '#1e1e1e',
+    'savefig.edgecolor': '#1e1e1e',
+})
 
 
 if cp.cuda.runtime.getDeviceCount() > 0:
@@ -34,15 +51,78 @@ else:
 
 # Plot-Setup
 fig= plt.figure(figsize=(16,9),)
+ax_dropdown=fig.add_axes([0.1,0.05,0.2,0.1])
+ax_activation=fig.add_axes([0.6,0.05,0.2,0.1])
 gs=GridSpec(3,4,height_ratios=[4,2,0.5])
 ax=fig.add_subplot(gs[0,0:2],projection='3d')
 ax2d=fig.add_subplot(gs[0,2:4])
 ax_drop=fig.add_axes([0.88,0.88,0.05,0.1])
 ax2=fig.add_subplot(gs[1,2:4])
-ax3=fig.add_subplot(gs[2,0:2])
+ax3=fig.add_subplot(gs[1,0:2])
 ax.view_init(elev=30, azim=135)
 
+# Slider for Hyperparameters
+ax_slider = fig.add_subplot(gs[2,3])
+ax_slider.set_title("Learning Rate", fontsize=8)
+                      
+ax2_slider=fig.add_subplot(gs[2,2])
+ax2_slider.set_title("Batch Size", fontsize=8)
+ax3_slider=fig.add_subplot(gs[2,1])
+ax3_slider.set_title("Lambda", fontsize=8)
+ax4_slider=fig.add_subplot(gs[2,0])
+ax4_slider.set_title("Hidden Layers", fontsize=8)
 
+batch_slider = st.slider(ax2_slider,  '',1, 128, valinit=30, valstep=1,facecolor='fuchsia',help="Amount of training samples per batch")
+lambda_slider = st.slider(ax3_slider,'' ,0.0, 1.0, valinit=0.001,facecolor='palegreen', help="Regularization parameter")
+w1_slider = st.slider(ax_slider, '', 0.001, 1.0, valinit=0.01,facecolor='yellow',help="Learning rate for the optimizer")
+hl_slider = st.slider(ax4_slider, '', 1, 300, valinit=50, valstep=1,facecolor='cyan',help="Number of hidden layers")
+
+
+lambda_l2=lambda_slider
+lr=w1_slider
+batch_size=batch_slider
+hidden_layers=[hl_slider]
+
+solver_dropdown = st.radio(ax_dropdown, ('Adam', 'SGD', 'RMSprop'))
+activation_dropdown = st.radio(ax_activation, ('tanh','relu','sigmoid','sin','cos','exp'))
+
+def on_solver_change(label):
+    global solver
+    if label == 'Adam':
+        mlp.solver='adam'
+        print("Using Adam optimizer")
+    elif label == 'SGD':
+        mlp.solver='sgd'
+        print("Using SGD optimizer")
+    elif label == 'RMSprop':
+        mlp.solver='rmsprop'
+        print("Using RMSprop optimizer")
+        fig.canvas.draw_idle()
+solver_dropdown.on_clicked(on_solver_change)
+
+def on_activation_change(label):
+    global activation
+    if label == 'tanh':
+        mlp.output_activation=sp.tanh
+        print("Using tanh activation")
+    elif label =='relu':
+        mlp.output_activation='relu'
+        print("Using relu activation")
+    elif label =='sigmoid':
+        mlp.output_activation='sigmoid'
+        print("Using sigmoid activation")
+    elif label =='sin':
+        mlp.output_activation=sp.sin
+        print("Using sin activation")
+    elif label == 'cos':
+        mlp.output_activation=sp.cos
+        print("Using cos activation")
+    elif label == 'exp':
+        mlp.output_activation=sp.exp
+        print("Using exp activation")
+    fig.canvas.draw_idle()
+
+activation_dropdown.on_clicked(on_activation_change)
 
 
 ax.grid(True, linestyle='--', alpha=0.5)
@@ -59,20 +139,18 @@ ax4 = ax2.twinx()
 
 # Initialize lists for storing history
 loss_values = []
+loss_values_fix=[]
 val_loss_values = []
 epoch_values = []
 w1_history = []
 w2_history = []
 w3_history = []
 b_history = []
-w4_history=[]
-w5_history=[]
-w6_history=[]
 mlp_sklearn_mse=[]
 mlp_sklearn_val_loss=[]
 
 options=['x1 vs y','x2 vs y', 'x3 vs y']
-radio=RadioButtons(ax_drop,options)
+radio=st.radio(ax_drop,options)
 selected=[options[0]]
 
 # SymPy symbols and allowed functions
@@ -155,7 +233,7 @@ def parse_expression(user_input):
 
 
 # Get user input
-user_input = input("Enter a function in terms of x1, x2, x3 (e.g., 'x1 + x2 + x3 + 2', 'sin(x3) + cos(x2)'): ")
+user_input = st.text_input("Enter a function in terms of x1, x2, x3 (e.g., 'x1 + x2 + x3 + 2', 'sin(x3) + cos(x2)'): ")
 f_train, f_true, w1_true, w2_true, w3_true, b_true,nonlinear_terms ,all_weights= parse_expression(user_input)
 
 
@@ -166,9 +244,10 @@ if f_train is None:
 
 weight_values = [0] * len(all_weights)
 
-mlp=symbolicMLP(cp,nonlinear_terms )
+mlp=symbolicMLP(np,nonlinear_terms,lambda_l2,lr,hidden_layers)
+mlp_reference=symbolicMLP(np,nonlinear_terms, 0.001,0.01,[50])
 
-vis_vars=input("Choose two visualization variables(e.g. x1,x2 or x1,x3)[default:x1,x2]")
+vis_vars=st.text_input("Choose two visualization variables(e.g. x1,x2 or x1,x3)[default:x1,x2]")
 
 if vis_vars not in ['x1,x2','x2,x3','x1,x3']:
     vis_vars='x1,x2'
@@ -302,18 +381,18 @@ def compute_pred_mesh(mlp):
 y_pred_mesh, y_pred_sklearn_mesh= compute_pred_mesh(mlp)
 y_true_mesh=f_true(x1_mesh,x2_mesh,x3_mesh)
 
-ax.plot([], [], [], color='black', alpha=0.3, label='Sklearn Prediction')
+ax.plot([], [], [], color='white', alpha=0.3, label='Sklearn Prediction')
 surface_first_pred= ax.plot_surface(x1_mesh.get(), x2_mesh.get(), y_pred_mesh.get(), cmap='viridis', alpha=0.3, label="First Prediction")
-
 loss_line, = ax2.plot([], [], color='purple', label='Loss')
+loss_fix_line, = ax2.plot([], [], color='palegreen', label='Loss with fixed parameters')
 val_line, = ax2.plot([], [], color='orange', label='Validation Loss')
-sklearn_line= ax2d.plot([],[],color='black',label="sklearn prediciton",linestyle='--')
+sklearn_line= ax2d.plot([],[],color='white',label="sklearn prediciton",linestyle='--')
 sklearn_mse_line, = ax2.plot([], [], color='black', label='Sklearn MSE') 
 sklearn_val_line, = ax2.plot([], [], color='gray', label='Sklearn Val Loss')
-w1_line, = ax4.plot([], [], label=f"W1: {mlp.w_vals['w1']:.4f}", color='green', linestyle='--', alpha=0.3)
-w2_line, = ax4.plot([], [], label=f"W2: {mlp.w_vals['w2']:.4f}", color='red', linestyle='--', alpha=0.3)
-w3_line, = ax4.plot([], [], label=f"W3: {mlp.w_vals['w3']:.4f}", color='blue', linestyle='--', alpha=0.3)
-b_line, = ax4.plot([], [], label=f"Bias: {mlp.w_vals['b']:.4f}", color='black', linestyle='--', alpha=0.3)
+w1_line, = ax4.plot([], [], label=f"W1: {mlp.weights[0][0, 0]:.4f}", color='green', linestyle='--', alpha=0.3)
+w2_line, = ax4.plot([], [], label=f"W2: {mlp.weights[0][0, 1]:.4f}", color='red', linestyle='--', alpha=0.3)
+w3_line, = ax4.plot([], [], label=f"W3: {mlp.weights[0][0, 2]:.4f}", color='blue', linestyle='--', alpha=0.3)
+b_line, = ax4.plot([], [], label=f"Bias: {mlp.biases[0][0, 0]:.4f}", color='black', linestyle='--', alpha=0.3)
 
 ax2.set_xlabel('Epoch')
 ax2.set_ylabel('Loss')
@@ -327,9 +406,7 @@ ax3.set_xlabel('Error')
 ax3.set_ylabel('Frequency')
 ax.legend(loc='upper left')
 
-# Slider for learning rate
-ax_slider = fig.add_subplot(gs[2,3])
-w1_slider = Slider(ax_slider, 'LR', 0.1, 2.0, valinit=0.1)
+
 
 
 
@@ -353,11 +430,12 @@ abar.set_label("True Value")
 bbar.set_label("Sklearn Prediction")
 
 
-batch_size=30
+
 
 def to_cpu(arr):
     return arr.get() if isinstance(arr, cp.ndarray) else arr
 
+model_list = [mlp, symbolicMLP]
 
 # Update function for animation
 plotted_surfaces = {'pred': None, 'sk': None, 'true': None}
@@ -366,23 +444,39 @@ def update(epoch):
     global loss_values, val_loss_values, epoch_values, w1_history, w2_history, w3_history, b_history
     global mlp_sklearn_val_loss, mlp_sklearn_mse
     lr = w1_slider.val
+    batch_size= batch_slider.val
     x1_flat, x2_flat, x3_flat = x1_mesh.ravel(), x2_mesh.ravel(), x3_mesh.ravel()
     y_true_flat = f_true(x1_flat, x2_flat, x3_flat)
     mse_train = 0.0
+    mse_fix = 0.0
     y_pred_mesh, y_pred_sklearn_mesh= compute_pred_mesh(mlp)
     # Train symbolicMLP in batches
+
     for i in range(0, len(x1_train), batch_size):
-        batch_x1 = x1_train[i:i + batch_size]
-        batch_x2 = x2_train[i:i + batch_size]
-        batch_x3 = x3_train[i:i + batch_size]
-        batch_y_true = y_train[i:i + batch_size]
-        y_pred_batch = mlp.forward(batch_x1, batch_x2, batch_x3)
-        mse_train += mlp.backward(batch_x1, batch_x2, batch_x3, batch_y_true, lr, y_pred_batch)
+            batch_x1 = x1_train[i:i + batch_size]
+            batch_x2 = x2_train[i:i + batch_size]
+            batch_x3 = x3_train[i:i + batch_size]
+            batch_y_true = y_train[i:i + batch_size]
+            y_pred_batch = mlp.forward(batch_x1, batch_x2, batch_x3)
+            mse_train += mlp.backward(batch_x1, batch_x2, batch_x3, batch_y_true)
+    
     mse_train /= (len(x1_train) // batch_size + 1)
+
+    for i in range(0, len(x1_train), 32):
+        batch_x1 = x1_train[i:i + 32]
+        batch_x2 = x2_train[i:i + 32]
+        batch_x3 = x3_train[i:i + 32]
+        batch_y_true = y_train[i:i + 32]
+        y_pred_batch = mlp_reference.forward(batch_x1, batch_x2, batch_x3)
+        mse_fix += mlp_reference.backward(batch_x1, batch_x2, batch_x3, batch_y_true)
+    mse_fix /= (len(x1_train) // 32 + 1)
+     
 
 
     y_pred_train = mlp.forward(x1_train, x2_train, x3_train)
+    y_pred_fix = mlp_reference.forward(x1_train, x2_train, x3_train)
     y_pred_test = mlp.forward(x1_test, x2_test, x3_test)
+    y_pred_test_fix = mlp_reference.forward(x1_test, x2_test, x3_test)
     mse_val = np.mean((y_test - y_pred_test) ** 2)
 
     # Train sklearn model on actual training data
@@ -400,17 +494,16 @@ def update(epoch):
 
     # Update histories
     loss_values.append(float(to_cpu(mse_train)))
+    loss_values_fix.append(float(to_cpu(mse_fix)))
     val_loss_values.append(float(to_cpu(mse_val)))
     mlp_sklearn_mse.append(float(sklearn_mse))
     mlp_sklearn_val_loss.append(float(sklearn_val_loss))
     epoch_values.append(float(epoch))
-    w1_history.append(float(mlp.w_vals.get('w1', 0)))
-    w2_history.append(float(mlp.w_vals.get('w2', 0)))
-    w3_history.append(float(mlp.w_vals.get('w3', 0)))
-    b_history.append(float(mlp.w_vals.get('b', 0)))
+    w1_history.append(float(mlp.weights[0][0,0]))
+    w2_history.append(float(mlp.weights[0][0,1]))
+    w3_history.append(float(mlp.weights[0][0,2]))
+    b_history.append(float(mlp.biases[0][0,0]))
 
- 
-    
     # Update 3D and contour plots every 5 frames
     if epoch % 5 == 0:
         y_pred_mesh, y_pred_sklearn_mesh = compute_pred_mesh(mlp)
@@ -436,6 +529,7 @@ def update(epoch):
         x2_plot = np.full_like(x_plot, np.mean(x2_train))
         x3_plot = np.full_like(x_plot, np.mean(x3_train))
         y_pred_plot = mlp.forward(x_plot, x2_plot, x3_plot)
+        y_pred_fix_plot = mlp_reference.forward(x_plot, x2_plot, x3_plot)
         X_plot = np.column_stack((x_plot, x2_plot, x3_plot))
         X_plot_scaled = scaler.transform(to_cpu(X_plot))
         y_sklearn_plot = mlp_sklearn.predict(X_plot_scaled)
@@ -444,8 +538,9 @@ def update(epoch):
         contour_sk = ax2d.contourf(to_cpu(x1_mesh),to_cpu(x2_mesh), y_pred_sklearn_mesh, cmap='cool', alpha=0.2)
         ax2d.scatter(x1_train_cpu, y_train_cpu, label="Training Data", color='blue',marker='o')
         ax2d.plot(to_cpu(x_plot), to_cpu(f_true(x_plot, x2_plot, x3_plot)), label='True', color='hotpink', alpha=0.7)
-        ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot), label='Predicted', color='lime', alpha=0.7)
-        ax2d.plot(to_cpu(x_plot), y_sklearn_plot, label='Sklearn Predicted', color='black', linestyle='--', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot).ravel(), label='Predicted based on user input', color='lime', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot),to_cpu(y_pred_fix_plot).ravel(), label='Predicted based on fixed weights', color='cyan',linestyle='--', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot), y_sklearn_plot, label='Sklearn Predicted', color='white', linestyle='--', alpha=0.7)
         ax2d.set_xlabel("x1")
         print(f"Epoch {epoch}: Sklearn y_pred min/max: {y_sklearn_plot.min():.4f}/{y_sklearn_plot.max():.4f}")
     elif choice == 'x2 vs y' and w2_true != 0:
@@ -453,13 +548,15 @@ def update(epoch):
         x1_plot = np.full_like(x_plot, np.mean(x1_train))
         x3_plot = np.full_like(x_plot, np.mean(x3_train))
         y_pred_plot = mlp.forward(x1_plot, x_plot, x3_plot)
+        y_pred_fix_plot = mlp_reference.forward(x1_plot, x_plot, x3_plot)
         X_plot = np.column_stack((x1_plot, x_plot, x3_plot))
         X_plot_scaled = scaler.transform(to_cpu(X_plot))
         y_sklearn_plot = mlp_sklearn.predict(X_plot_scaled)
+        ax2d.scatter(x2_train_cpu, y_train_cpu, label="Training Data", color='blue',marker='o')
         ax2d.plot(to_cpu(x_plot), to_cpu(f_true(x1_plot, x_plot, x3_plot)), label='True', color='hotpink', alpha=0.7)
-        ax2d.scatter(to_cpu(x_plot), to_cpu(f_true(x1_plot, x_plot, x3_plot)), label="Training Data", color='blue', marker='o')
-        ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot), label='Predicted', color='lime', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot).ravel(), label='Predicted', color='lime', alpha=0.7)
         ax2d.plot(to_cpu(x_plot), y_sklearn_plot, label='Sklearn Predicted', color='black', linestyle='--', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot),to_cpu(y_pred_fix_plot).ravel(), label='Predicted based on fixed weights', color='green',linestyle='--', alpha=0.7)
         ax2d.set_xlabel("x2")
         print(f"Epoch {epoch}: Sklearn y_pred min/max: {y_sklearn_plot.min():.4f}/{y_sklearn_plot.max():.4f}")
     elif choice == 'x3 vs y' and w3_true != 0:
@@ -467,13 +564,15 @@ def update(epoch):
         x1_plot = np.full_like(x_plot, np.mean(x1_train))
         x2_plot = np.full_like(x_plot, np.mean(x2_train))
         y_pred_plot = mlp.forward(x1_plot, x2_plot, x_plot)
+        y_pred_fix_plot = mlp_reference.forward(x1_plot, x2_plot, x_plot)
         X_plot = np.column_stack((x1_plot, x2_plot, x_plot))
         X_plot_scaled = scaler.transform(to_cpu(X_plot))
         y_sklearn_plot = mlp_sklearn.predict(X_plot_scaled)
-        ax2d.plot(to_cpu(x_plot), to_cpu(f_true(x1_plot, x2_plot, x_plot)), label='True', color='hotpink', alpha=0.7)
         ax2d.scatter(x3_train_cpu, y_train_cpu, label="Training Data", color='blue', marker='o')
-        ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot), label='Predicted', color='lime', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot), to_cpu(f_true(x1_plot, x2_plot, x_plot)), label='True', color='hotpink', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot), to_cpu(y_pred_plot).ravel(), label='Predicted', color='lime', alpha=0.7)
         ax2d.plot(to_cpu(x_plot), y_sklearn_plot, label='Sklearn Predicted', color='black', linestyle='--', alpha=0.7)
+        ax2d.plot(to_cpu(x_plot),to_cpu(y_pred_fix_plot).ravel(), label='Predicted based on fixed weights', color='green',linestyle='--', alpha=0.7)
         ax2d.set_xlabel("x3")
         print(f"Epoch {epoch}: Sklearn y_pred min/max: {y_sklearn_plot.min():.4f}/{y_sklearn_plot.max():.4f}")
     else:
@@ -484,19 +583,26 @@ def update(epoch):
     ax2d.set_ylabel("y")
     ax2d.grid(True, linestyle="--", alpha=0.5)
     ax2d.legend(loc="upper left")
+    ax2d.set_title("2D visualization")
 
     # Update histogram
     errors = y_train - mlp.forward(x1_train, x2_train, x3_train)
     val_errors = y_test - y_pred_test
+    errors_fix=y_train - mlp_reference.forward(x1_train, x2_train, x3_train)
+    #errors_sklearn_mse=y_train- np.mean((to_cpu(y_train) - mlp_sklearn.predict(to_cpu(X_plot_scaled)))**2)
     ax3.clear()
-    ax3.hist(to_cpu(errors), bins=30, color='red', alpha=0.7, label='Training Errors')
-    ax3.hist(to_cpu(val_errors), bins=30, color='lime', alpha=0.7, label='Validation Errors')
+    ax3.hist(to_cpu(errors).ravel(), bins=30, color='red', alpha=0.7,zorder=1, label='Training Errors based on user input')
+    ax3.hist(to_cpu(val_errors).ravel(), bins=30, color='lime', alpha=0.7,zorder=3, label='Validation Errors')
+    ax3.hist(to_cpu(errors_fix).ravel(), bins=30, color='blue', alpha=0.7, zorder=2,label='Errors with fixed weights')
+    #ax3.hist(to_cpu(errors_sklearn_mse).ravel(), bins=30, color='purple', alpha=0.7, zorder=0, label='Errors with sklearn MSE')
     ax3.set_xlabel('Error')
     ax3.set_ylabel('Frequency')
     ax3.legend(loc='upper right')
+    ax3.set_title("Errors and validation errors")
 
     # Update loss and weights
     loss_line.set_data(epoch_values, loss_values)
+    loss_fix_line.set_data(epoch_values, loss_values_fix)
     val_line.set_data(epoch_values, val_loss_values)
     sklearn_mse_line.set_data(epoch_values, mlp_sklearn_mse)
     sklearn_val_line.set_data(epoch_values, mlp_sklearn_val_loss)
@@ -524,8 +630,8 @@ def update(epoch):
 
 # Animation
 ani = FuncAnimation(fig, update, frames=300, interval=50, blit=False, repeat=False,cache_frame_data=False)
-plt.tight_layout()
-plt.subplots_adjust(bottom=0.15)
-plt.show()
+fig.tight_layout()
+fig.subplots_adjust(bottom=0.15)
+st.pyplot(fig)
 
 #
