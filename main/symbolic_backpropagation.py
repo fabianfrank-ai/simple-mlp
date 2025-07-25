@@ -2,7 +2,7 @@ import sympy as sp
 import numpy as np
 
 class symbolicMLP:
-    def __init__(self, np_module, nonlinear_terms, l2_lambda, lr, hidden_layers, scale_factor=2.0, offset=0.0):
+    def __init__(self, np_module, nonlinear_terms, l2_lambda, lr, hidden_layers, solver,activation_function, scale_factor=2.0, offset=0.0 ):
         self.np = np_module
         self.nonlinear_weights = nonlinear_terms
         self.scale_factor = scale_factor
@@ -18,11 +18,16 @@ class symbolicMLP:
         self.best_weights = {}
         self.l2_lambda = l2_lambda
         self.hidden_layers = hidden_layers if isinstance(hidden_layers, list) else [hidden_layers]
-        self.solver = 'adam'
+        self.solver = solver
+       
 
         # Determine output activation based on nonlinear terms
-        self.output_activation = next((f for f, terms in nonlinear_terms.items() if terms), None)
-
+        if activation_function == 'placeholder':
+          self.output_activation = next((f for f, terms in nonlinear_terms.items() if terms), None)
+        else: 
+            self.output_activation =activation_function
+        
+    
         # Initialize weights and biases as matrices and vectors
         scale = 0.1
         input_size = 3  # For x1, x2, x3
@@ -49,13 +54,13 @@ class symbolicMLP:
 
     def _apply_activation(self, func, z):
         """Applies the specified activation function to z."""
-        if func == sp.sin:
+        if func == sp.sin or'sin'  :
             return self.np.sin(z)
-        elif func == sp.cos:
+        elif func == sp.cos or 'cos'  :
             return self.np.cos(z)
-        elif func == sp.exp:
+        elif func == sp.exp or 'exp'  :
             return self.np.exp(z)
-        elif func == sp.tanh:
+        elif func == sp.tanh or 'tanh': 
             return self.np.tanh(z)
         elif func == 'sigmoid':
             return 1/(1 + self.np.exp(-z))  
@@ -66,13 +71,13 @@ class symbolicMLP:
 
     def _apply_derivative(self, z, func):
         """Applies the derivative of the specified activation function."""
-        if func == sp.sin:
+        if func == sp.sin or'sin':
             return self.np.cos(z)
-        elif func == sp.cos:
+        elif func == sp.cos or 'cos':
             return -self.np.sin(z)
-        elif func == sp.exp:
+        elif func == sp.exp or 'exp'  :
             return self.np.exp(z)
-        elif func == sp.tanh:
+        elif func == sp.tanh or 'tanh':
             return 1 - self.np.tanh(z)**2
         elif func == 'sigmoid':
             return self.np.exp(z) / (1 + self.np.exp(z))**2  # sigmoid derivative
@@ -148,10 +153,12 @@ class symbolicMLP:
         self.epoch_count += 1
         return loss
     
+    
 
     def _update_weights(self, w, grad_w, m_w, v_w):
         """Updates weights using chosen optimizer."""
-        if self.solver == 'adam':
+       
+        if self.solver in['adam' ,'Adam']:
             self.t += 1
             m_w = self.beta1 * m_w + (1 - self.beta1) * grad_w
             v_w = self.beta2 * v_w + (1 - self.beta2) * (grad_w ** 2)
@@ -159,31 +166,32 @@ class symbolicMLP:
             v_hat = v_w / (1 - self.beta2 ** self.t)
             w -= self.lr * m_hat / (self.np.sqrt(v_hat) + self.epsilon)
             return m_w, v_w
-        elif self.solver =='sgd':
+        elif self.solver in['sgd' , 'SGD']:
             self.t += 1
             w -= self.lr * grad_w
-            return m_w, v_w
-        elif self.solver == 'rmsprop':
+            return m_w, v_w 
+        elif self.solver in ['rmsprop', 'RMSprop']:
             self.t += 1
             v_w= self.beta2*v_w+(1-self.beta2) * (grad_w ** 2)
             w -= grad_w*self.lr/(self.np.sqrt(v_w)+self.epsilon)
             return m_w, v_w
+        
     
         
 
     def _update_biases(self, b, grad_b, m_b, v_b):
         """Updates biases using chosen optimizer."""
-        if self.solver=='adam':
+        if self.solver in ['adam' ,'Adam']:
             m_b = self.beta1 * m_b + (1 - self.beta1) * grad_b
             v_b = self.beta2 * v_b + (1 - self.beta2) * (grad_b ** 2)
             m_hat = m_b / (1 - self.beta1 ** self.t)
             v_hat = v_b / (1 - self.beta2 ** self.t)
             b -= self.lr * m_hat / (self.np.sqrt(v_hat) + self.epsilon)
             return m_b, v_b
-        elif self.solver=='sgd':
+        elif self.solver in['sgd' , 'SGD']:
             b -= self.lr * grad_b
             return m_b, v_b
-        elif self.solver=='rmsprop':
+        elif self.solver in ['rmsprop', 'RMSprop']:
             v_b= self.beta2*v_b+(1-self.beta2) * (grad_b ** 2)
             b -= grad_b*self.lr/(self.np.sqrt(v_b)+self.epsilon)
             return m_b, v_b

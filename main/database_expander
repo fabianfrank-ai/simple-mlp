@@ -1,0 +1,165 @@
+import cupy as np
+from symbolic_backpropagation import symbolicMLP
+import sqlite3
+import optuna
+import numpy 
+from sklearn.model_selection import train_test_split
+from numba import jit
+import sympy as sp
+
+
+dataset_formula = 'tanh(x1)'
+
+
+def create_database():
+    """Create the database table if it doesn't exist."""
+    conn = sqlite3.connect('mlp_parameters.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS trainings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            function TEXT,
+            optimizer TEXT,
+            activation TEXT,
+            lr REAL,
+            batch_size INTEGER,
+            lambda_l2 REAL,
+            hidden_layers INTEGER,
+            val_loss REAL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+create_database()
+
+def clear_all_data():
+    """Delete all records from the trainings table."""
+    conn = sqlite3.connect('mlp_parameters.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM trainings")
+    conn.commit()
+    conn.close()
+    print("✅ All records deleted from the database.")
+#clear_all_data()
+
+
+x1=np.linspace(-np.pi, np.pi, 100)
+x2=np.linspace(-np.pi, np.pi, 100)
+x3=np.linspace(-np.pi, np.pi, 100)
+y= np.tanh(x1)
+
+# Normalize the inputs
+X = np.stack([x1, x2, x3], axis=1)
+
+x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+x1_train, x2_train, x3_train = x_train[:, 0], x_train[:, 1], x_train[:, 2]
+x1_test, x2_test, x3_test = x_test[:, 0], x_test[:, 1], x_test[:, 2]
+
+# Define dummy nonlinear terms for testing purposes
+dummy_nonlinear_terms = {
+    'sin(x1)': x1,
+    'exp(x2)': x2,}
+
+def objective(trial):
+    optimizer_name = trial.suggest_categorical('optimizer', ['sgd', 'adam', 'rmsprop'])
+    activation = trial.suggest_categorical('activation', ['relu', 'tanh','sigmoid','sin', 'cos', 'exp', 'log'])
+    lr = trial.suggest_float('lr', 1e-5, 1e-1,log=True)    
+    batch_size_optuna = trial.suggest_int('batch_size', 16, 128)
+    lambda_l2 = trial.suggest_float('lambda_l2', 1e-8, 1, log=True)    
+    hidden_layers = trial.suggest_int('hidden_layers', 1, 10)
+    
+    model=symbolicMLP(np,dummy_nonlinear_terms,lambda_l2,lr,hidden_layers, solver=optimizer_name, activation_function=activation)
+    val_loss_optuna=train_and_evaluate(model,batch_size_optuna,trial)
+    return val_loss_optuna
+
+def train_and_evaluate(model, batch_size,trial):
+    epochs = 100
+    for epoch in range(epochs):
+        mse_train = 0.0
+        # Training in Batches
+        for i in range(0, len(x1_train), batch_size):
+            batch_x1 = x1_train[i:i + batch_size]
+            batch_x2 = x2_train[i:i + batch_size]
+            batch_x3 = x3_train[i:i + batch_size]
+            batch_y_true = y_train[i:i + batch_size]
+            y_pred_batch = model.forward(batch_x1, batch_x2, batch_x3)
+            mse_train += model.backward(batch_x1, batch_x2, batch_x3, batch_y_true)
+        mse_train /= (len(x1_train) // batch_size + 1)
+
+        y_pred_val = model.forward(x1_test, x2_test, x3_test)
+        mse_val = np.mean((y_test - y_pred_val) ** 2)
+        trial.report(mse_val, epoch)
+
+        if trial.should_prune():
+            raise optuna.exceptions.TrialPruned()
+
+    return mse_val
+def function_exists(function_str):
+    conn = sqlite3.connect('mlp_parameters.db')
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM trainings WHERE function = ?", (function_str,))
+    exists = c.fetchone()[0] > 0
+    conn.close()
+    return exists 
+
+def get_existing_entry(function_str):
+    conn = sqlite3.connect('mlp_parameters.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM trainings WHERE function = ?", (function_str,))
+    result = c.fetchone()
+    conn.close()
+    return result
+
+def insert_data(function, best_params, val_loss):
+    conn = sqlite3.connect('mlp_parameters.db')
+    c = conn.cursor()
+
+    c.execute('''
+        SELECT * FROM trainings
+        WHERE function = ? AND optimizer = ? AND activation = ? AND
+              lr = ? AND batch_size = ? AND lambda_l2 = ? AND hidden_layers = ? AND val_loss = ?
+    ''', (
+        function,
+        best_params['optimizer'],
+        best_params['activation'],
+        best_params['lr'],
+        best_params['batch_size'],
+        best_params['lambda_l2'],
+        best_params['hidden_layers'],
+        val_loss
+    ))
+
+    if c.fetchone() is None:
+        c.execute('''
+            INSERT INTO trainings (
+                function, optimizer, activation, lr,
+                batch_size, lambda_l2, hidden_layers, val_loss
+            ) VALUES (?, ?, ?, ?, ?, ?, ?,?)
+        ''', (
+            function,
+            best_params['optimizer'],
+            best_params['activation'],
+            best_params['lr'],
+            best_params['batch_size'],
+            best_params['lambda_l2'],
+            best_params['hidden_layers'],
+            val_loss
+        ))
+        conn.commit()
+        print("✅ New combination inserted.")
+    else:
+        print("⚠️ Combination already exists. Skipping insert.")
+
+    conn.close()
+
+
+
+
+if not function_exists(dataset_formula):
+            study = optuna.create_study(direction="minimize",sampler=optuna.samplers.CmaEsSampler(warn_independent_sampling=False), pruner=optuna.pruners.MedianPruner(n_warmup_steps=10,n_min_trials=5))
+            study.optimize(objective, n_trials=100, n_jobs=4)
+
+            if study.best_trial is not None:
+                best_params = study.best_params
+                best_val_loss = study.best_value
+                insert_data(dataset_formula, best_params, best_val_loss)
